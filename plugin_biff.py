@@ -3,7 +3,7 @@
 __description__ = 'BIFF plugin for oledump.py'
 __author__ = 'Didier Stevens'
 __version__ = '0.0.3'
-__date__ = '2018/10/26'
+__date__ = '2019/01/11'
 
 """
 
@@ -20,6 +20,7 @@ History:
   2018/10/24: 0.0.3 started coding Excel 4.0 macro support
   2018/10/25: continue
   2018/10/26: continue
+  2019/01/11: added -d switch for dumping images. to disk
 
 Todo:
 """
@@ -505,6 +506,7 @@ class cBIFF(cPluginParent):
             stream = self.stream
 
             oParser = optparse.OptionParser()
+            oParser.add_option('-e', '--extract', action='store_true', default=False, help='Extract images')
             oParser.add_option('-s', '--strings', action='store_true', default=False, help='Dump strings')
             oParser.add_option('-a', '--hexascii', action='store_true', default=False, help='Dump hex ascii')
             oParser.add_option('-o', '--opcode', type=str, default='', help='Opcode to filter for')
@@ -514,6 +516,11 @@ class cBIFF(cPluginParent):
             if options.find.startswith('0x'):
                 options.find = binascii.a2b_hex(options.find[2:])
 
+            # data structures for image carving.
+            images = []
+            image_buffer = ""
+
+            # walk the stream.
             while stream != '':
                 formatcodes = 'HH'
                 formatsize = struct.calcsize(formatcodes)
@@ -556,6 +563,45 @@ class cBIFF(cPluginParent):
                     dSheetType = {0: 'worksheet or dialog sheet', 1: 'Excel 4.0 macro sheet', 2: 'chart', 6: 'Visual Basic module'}
                     dSheetState = {0: 'visible', 1: 'hidden', 2: 'very hidden'}
                     line += ' - %s, %s' % (dSheetType.get(ord(data[5]), '%02x' % ord(data[5])), dSheetState.get(ord(data[4]), '%02x' % ord(data[4])))
+
+                # image carving.
+                if options.extract:
+                    # MSODRAWINGGROUP : Microsoft Office Drawing Group
+                    if opcode == 0xEB:
+                        # if this is the first capture of image data, we have to remove some cruft from the start.
+                        #       is this a static gobble of 0x75?
+                        #       is it better to grep for image magic?
+                        #       is there a size param i'm missing?
+                        if not image_buffer:
+                            data = data[0x75:]
+
+                        image_buffer += data
+                        # result.append(" [EB] image + %d = %d bytes" % (len(data), len(image_buffer)))
+
+                    # CONTINUE : Continues Long Records
+                    if opcode == 0x3C:
+                        image_buffer += data
+                        # result.append(" [3C] image + %d = %d bytes" % (len(data), len(image_buffer)))
+
+                        # if max chunk wasn't read, then we're done with this file.
+                        if len(data) < 0x2020:
+                            images.append(image_buffer)
+                            image_buffer = ""
+
+                # write carved images to disk.
+                for idx, buffer in enumerate(images):
+                    if "\xff\xd8\xff" in buffer[:64]:
+                        ext = "jpg"
+                    elif "\x89PNG" in buffer[:64]:
+                        ext = "png"
+                    elif "GIF8" in buffer[:64]:
+                        ext = "gif"
+                    else:
+                        ext = "unknown"
+
+                    # images are written as image-$INDEX.$EXTENSION, where extension can be jpg/png/gif/unknown.
+                    with open("image-%03d.%s" % (idx, ext), "wb") as fh:
+                        fh.write(buffer)
 
                 if options.find == '' and options.opcode == '' or options.opcode != '' and options.opcode.lower() in line.lower() or options.find != '' and options.find in data:
                     result.append(line)
