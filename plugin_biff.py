@@ -23,6 +23,9 @@ History:
   2019/01/11: added -d switch for dumping images. to disk
 
 Todo:
+
+References:
+    https://www.openoffice.org/sc/excelfileformat.pdf
 """
 
 import struct
