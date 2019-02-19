@@ -11,6 +11,10 @@ Source code put in public domain by Didier Stevens, no Copyright
 https://DidierStevens.com
 Use at your own risk
 
+Modifications made by @InQuest, supporting blog available at:
+
+    http://blog.inquest.net/blog/2019/01/29/Carving-Sneaky-XLM-Files/
+
 History:
   2014/11/15: start
   2014/11/21: changed interface: added options; added options -a (asciidump) and -s (strings)
@@ -20,13 +24,57 @@ History:
   2018/10/24: 0.0.3 started coding Excel 4.0 macro support
   2018/10/25: continue
   2018/10/26: continue
-  2019/01/11: added -d switch for dumping images. to disk
+  2019/01/11: @InQuest added -e switch for dumping images to disk
+  2019/02/19: @InQuest improved logic for properly carving out images
 
 Todo:
 
 References:
     https://www.openoffice.org/sc/excelfileformat.pdf
 """
+
+START, END, EXTENSION = range(3)
+DEBUG = True
+CARVE_PAIRINGS = \
+{
+    # label, start marker, end marker, file extension.
+    # NOTE: don't use None for blank entries, use "".
+    # NOTE: markers are in regular expression format!
+    "JPG-NORMAL"  :  ["\xff\xd8\xff(\xe0|\xe1|\xfe)",  "\xff\xd9", "jpg"],
+    "PNG"         :  ["\x89PNG",                               "", "png"],
+    "GIF"         :  ["GIF8(9|7)a",                            "", "gif"],
+    "CDF-OLE"     :  ["\xD0\xCF\x11\xE0",                      "", "ole"],
+    "ZIP"         :  ["PK\x03\x04",                            "", "zip"],
+}
+
+def hexify (s, preserve_printables=False):
+    hexed = ""
+
+    for b in s:
+        if preserve_printables and b in string.printable:
+            hexed += b
+        else:
+            hexed += "%02x" % ord(b)
+
+    return "".join(hexed)
+
+def find_all (needle, haystack, include_marker=False):
+    indexes = []
+
+    for match in re.finditer(needle, haystack):
+        found = match.start()
+
+        if include_marker:
+            found += len(needle)
+
+        indexes.append(found)
+
+        if DEBUG:
+            print "found needle '%s' in haystack at offset %04x" % (hexify(needle), found)
+
+    return indexes
+
+import string
 
 import struct
 import re
@@ -573,10 +621,24 @@ class cBIFF(cPluginParent):
                     if opcode == 0xEB:
                         # if this is the first capture of image data, we have to remove some cruft from the start.
                         #       is this a static gobble of 0x75?
+                        #           NO!
                         #       is it better to grep for image magic?
+                        #           current method!
                         #       is there a size param i'm missing?
+                        #           unknown (someone help?)
                         if not image_buffer:
-                            data = data[0x75:]
+                            starter = 0
+
+                            # walk the carving pairing datastructure and carve away.
+                            for kind, marker in CARVE_PAIRINGS.iteritems():
+                                # there's always a start, grab the first one.
+                                starters = find_all(marker[START], data)
+                                if starters:
+                                    starter = starters[0]
+                                    result.append("found marker '%s' for %s at start at %s/0x%x %s" % (marker, kind, starter, starter, starters))
+                                    break
+
+                            data = data[starter:]
 
                         image_buffer += data
                         # result.append(" [EB] image + %d = %d bytes" % (len(data), len(image_buffer)))
